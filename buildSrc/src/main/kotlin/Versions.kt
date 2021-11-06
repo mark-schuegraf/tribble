@@ -11,7 +11,7 @@ object Versions {
     const val shadowPlugin = "7.0.0"
 
     // dependencies
-    const val scala = "2.12.13"
+    const val scala = "2.12.14"
     const val automaton = "1.12-1"
     const val log4s = "1.10.0"
     const val logback = "1.2.3"

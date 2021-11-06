@@ -1,5 +1,6 @@
 package de.cispa.se.tribble
-package input
+package transformation
+package grammar_adaptation
 
 /**
   * Inlines rules into their reference sites.
@@ -42,11 +43,12 @@ package input
   * Note: will try to preserve rule ids.
   *
   * @param inlineLevels how many times to repeat the inline operation.
+  * @param productionFilter optional: inline only those references that fulfil this predicate
   */
-class RuleInlining(private val inlineLevels: Int) extends AssemblyPhase {
+class RuleInlining(private val inlineLevels: Int, private val productionFilter: NonTerminal => Boolean = _ => true) extends GrammarTransformer {
   require(inlineLevels >= 0, s"The number of inline levels must not be negative! ($inlineLevels given")
 
-  override def process(grammar: GrammarRepr): GrammarRepr = {
+  override def transformGrammarNoIds(grammar: GrammarRepr): GrammarRepr = {
     var g = grammar
     for (_ <- 0 until inlineLevels) {
       g = inlineGrammar(g)
@@ -54,32 +56,19 @@ class RuleInlining(private val inlineLevels: Int) extends AssemblyPhase {
     g
   }
 
-  private def inlineGrammar(grammar: GrammarRepr): GrammarRepr = {
+  protected def inlineGrammar(grammar: GrammarRepr): GrammarRepr = {
     // inline references
     val inlinedRules = grammar.rules.mapValues(inlineRule(_)(grammar)).view.force
     // filter out unused declarations
-    GrammarRepr(grammar.start, filterUsedReferences(inlinedRules, grammar.start))
+    GrammarRepr(grammar.start, UselessSymbolElimination.filterUsedReferences(inlinedRules, grammar.start))
   }
 
   private def inlineRule(rule: DerivationRule)(implicit grammar: GrammarRepr): DerivationRule = rule match {
-    case r: Reference => grammar(r)
+    case r@ Reference(name, _) if productionFilter(name) => grammar(r)
     case Concatenation(elements, id) => Concatenation(elements.map(inlineRule), id)
     case Alternation(alts, id) => Alternation(alts.map(inlineRule), id)
     case Quantification(subject, min, max, id) => Quantification(inlineRule(subject), min, max, id)
     case rule: TerminalRule => rule
   }
 
-  private def filterUsedReferences(rules: Map[NonTerminal, DerivationRule], startSymbol: NonTerminal): Map[NonTerminal, DerivationRule] = {
-    var fixpoint = false
-    var filteredRules = rules
-    do {
-      val usedReferences = Set(startSymbol) ++ filteredRules.values.flatMap(_.toStream.flatMap { case r: Reference => Some(r) case _ => None }).map(_.name)
-      val newFilteredRules = filteredRules.filterKeys(usedReferences)
-      if (newFilteredRules.keySet == filteredRules.keySet)
-        fixpoint = true
-      filteredRules = newFilteredRules
-
-    } while (!fixpoint)
-    filteredRules
-  }
 }

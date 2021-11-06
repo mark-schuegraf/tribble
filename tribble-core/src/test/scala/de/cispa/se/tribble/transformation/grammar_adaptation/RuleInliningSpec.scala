@@ -1,9 +1,10 @@
 package de.cispa.se.tribble
-package input
+package transformation
+package grammar_adaptation
 
 import de.cispa.se.tribble.dsl._
 
-class RuleInliningSpec extends TestSpecification with SharedModelAssembler {
+class RuleInliningSpec extends TransformationTestSpecification {
 
   "The RuleInlining" should "inline references correctly" in {
     val g = Grammar(
@@ -12,10 +13,10 @@ class RuleInliningSpec extends TestSpecification with SharedModelAssembler {
       'C := "c"
     )
     val grammar = modelAssembler.assemble(g.productions)
-    val inlinedOnce = new RuleInlining(1).process(grammar)
+    val inlinedOnce = new RuleInlining(1).transformGrammar(grammar)
     inlinedOnce.rules should have size 2
 
-    val inlinedTwice = new RuleInlining(2).process(grammar)
+    val inlinedTwice = new RuleInlining(2).transformGrammar(grammar)
     inlinedTwice.rules should have size 1
   }
 
@@ -27,7 +28,7 @@ class RuleInliningSpec extends TestSpecification with SharedModelAssembler {
     val grammar = modelAssembler.assemble(g.productions)
     for (repetitions <- 1 to 7) {
       val inlining = new RuleInlining(repetitions)
-      val inlined = inlining.process(grammar)
+      val inlined = inlining.transformGrammar(grammar)
       inlined("A").toStream.length shouldEqual math.pow(2, repetitions + 2).intValue + 1
     }
   }

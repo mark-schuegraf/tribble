@@ -1,9 +1,10 @@
 package de.cispa.se.tribble
-package input
+package transformation
+package grammar_adaptation
 
 import de.cispa.se.tribble.dsl._
 
-class AlternationExtractionSpec extends TestSpecification with SharedNoIdModelAssembler {
+class AlternationExtractionSpec extends TransformationTestSpecification {
 
   "The alternation extraction" should "extract alternatives" in {
     val g = Grammar(
@@ -13,10 +14,6 @@ class AlternationExtractionSpec extends TestSpecification with SharedNoIdModelAs
       'C := "c1" | "c2" ~ ("c3" | "c4"),
       'D := "d1" | "d2"
     )
-    val grammar: GrammarRepr = modelAssembler.assemble(g.productions)
-
-    val extracted: GrammarRepr = AlternationExtraction.process(grammar)
-
     val eG = Grammar(
       'S := 'A | 'B,
       'A := "a1" ~ 'A_a0.? ~ ("a3" ~ 'A_a1).rep,
@@ -29,10 +26,7 @@ class AlternationExtractionSpec extends TestSpecification with SharedNoIdModelAs
       'C_a0 := "c3" | "c4",
       'D := "d1" | "d2"
     )
-
-    val expected: GrammarRepr = modelAssembler.assemble(eG.productions)
-
-    extracted shouldEqual expected
+    checkGrammarEquality(AlternationExtraction, g, eG)
   }
 
   it should "extract nested alternations" in {
@@ -44,10 +38,6 @@ class AlternationExtractionSpec extends TestSpecification with SharedNoIdModelAs
       'A := Alternation(Seq("a1", Alternation(Seq("a2", Alternation(Seq("a3", 'B)))))),
       'B := "b1"
     )
-    val grammar: GrammarRepr = modelAssembler.assemble(g.productions)
-
-    val extracted: GrammarRepr = AlternationExtraction.process(grammar)
-
     val eG = Grammar(
       'S := 'A,
       'A := "a1" | 'A_a0,
@@ -55,9 +45,22 @@ class AlternationExtractionSpec extends TestSpecification with SharedNoIdModelAs
       'A_a0_a0 := "a3" | 'B,
       'B := "b1"
     )
-
-    val expected: GrammarRepr = modelAssembler.assemble(eG.productions)
-
-    extracted shouldEqual expected
+    checkGrammarEquality(AlternationExtraction, g, eG)
   }
+
+  it should "deal with self-loops" in {
+    val g = Grammar(
+      'S := 'A,
+      /* direct invocation of Alternation() to prevent flattening of
+      'A := "a1" | ("a2" | 'A) */
+      'A := Alternation(Seq("a1", Alternation(Seq("a2", 'A))))
+    )
+    val eG = Grammar(
+      'S := 'A,
+      'A := "a1" | 'A_a0,
+      'A_a0 := "a2" | 'A
+    )
+    checkGrammarEquality(AlternationExtraction, g, eG)
+  }
+
 }

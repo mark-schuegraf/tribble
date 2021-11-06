@@ -1,13 +1,16 @@
 package de.cispa.se.tribble
 
-import java.io.File
-import java.nio.file.{Files, Path}
-
 import de.cispa.se.tribble.generation._
 import de.cispa.se.tribble.input._
+import de.cispa.se.tribble.output._
+import de.cispa.se.tribble.transformation._
+import de.cispa.se.tribble.transformation.grammar_adaptation._
+import de.cispa.se.tribble.transformation.normal_forms._
 import org.backuity.clist.{Command, arg, opt}
 import org.log4s.getLogger
 
+import java.io.File
+import java.nio.file.{Files, Path}
 import scala.util.Random
 
 
@@ -87,6 +90,7 @@ trait HeuristicModule { self: Command =>
 
   lazy val heuristicImpl: Heuristic = heuristic match {
     case "random" => new RandomChoice(random)
+    case "least-recently-used" => new LRUChoice(random)
     case "non-terminal-coverage" => new NonTerminalCoverage(random, grammar)
     case nWindowPairNonTermPattern(n) => new NWindowPairNonTerminalCoverage(n.toInt, random, grammar)
     case kPathNonTermPattern(k) => new KPathNonTerminalCoverage(k.toInt, random, grammar)
@@ -135,6 +139,7 @@ trait ForestGeneratorModule { self: Command =>
   private val fallOverPattern = """(\d+)-path-(\d+)-fall-over-(\d+)""".r
   private val recurrentFallOverPattern = """recurrent-(\d+)-path-(\d+)-close-off-(\d+)""".r
   private val recurrentKPathPattern = """recurrent-(\d+)-path-(\d+)""".r
+  private val incrementingKPathPattern = """incrementing-(\d+)-path-(\d+)""".r
   private val recurrentTimedKPathPattern = """recurrent-(\d+)-path-(\d+)-minutes""".r
   private val rndPattern = """(\d+)-random-(\d+)""".r
   private val sizedPattern = """(\d+)-(\d+)-random-(\d+)""".r
@@ -148,25 +153,113 @@ trait ForestGeneratorModule { self: Command =>
       | <k>-path-<d>-fall-over-<n>            (Generate n files while going for full k-path coverage first and continuing with max depth d random)
       | recurrent-<k>-path-<n>                (Generate n files with while recurrently targeting k-path coverage goals)
       | recurrent-<k>-path-<d>-close-off-<n>  (Generate n files while recurrently going for k-path coverage but closing off trees with up to d deep random mode)
-      | recurrent-<k>-path-<m>-minutes        (Generate files with while recurrently targeting k-path coverage goals. Stop after m minutes)
+      | recurrent-<k>-path-<m>-minutes        (Generate files while recurrently targeting k-path coverage goals. Stop after m minutes)
+      | incrementing-<k>-path-<m>-minutes     (Generate files while targeting k-path coverage goals for ever increasing k. Stop after m minutes)
       | <s>-random-<n>                        (Generate n random files of approximate tree size s)
       | <min>-<max>-random-<n>                (Generate n random files of tree sizes between min and max)
-      | <max>-depth-random-<n>                (Generate n random files of depth up to max)
+      | <max>-depth-random-<n>                (Generate n random files of depth up to max, or else as deep as the shortest derivation)
       | <d>-probabilistic-<n>                 (Generate n files adhering to probability annotations ignoring optional elements after depth d)
       | <d>-<c>-probabilistic-<n>             (Generate n files adhering to probability annotations ignoring optional elements after depth d and switching over to shortest derivation after depth c)""".stripMargin)
   lazy val forestGenerator: ForestGenerator = mode match {
     case sizedPattern(min, max, n) => new SizedForestAdapter(min.toInt, max.toInt, n.toInt, heuristicImpl, maxRepetitions)(grammar, random, shortestTreeGenerator)
-    case depthPattern(depth, num) => new ForestAdapter(new MaxDepthGenerator(maxRepetitions, random, regexGenerator, depth.toInt, heuristicImpl), num.toInt)
+    case depthPattern(depth, num) => new ForestAdapter(new BestEffortMaxDepthGenerator(maxRepetitions, random, regexGenerator, depth.toInt, heuristicImpl), num.toInt)
     case fallOverPattern(k, depth, num) => new ContinuingForestAdapter(new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new KPathCoverageGoal(k.toInt)), new BestEffortMaxDepthGenerator(maxRepetitions, random, regexGenerator, depth.toInt, heuristicImpl), num.toInt)
     case recurrentFallOverPattern(k, depth, num) => new ForestSizeLimiter(new GoalBasedTreeGenerator(new BestEffortMaxDepthGenerator(maxRepetitions, random, regexGenerator, depth.toInt, heuristicImpl), random)(grammar, new RecurrentKPathCoverageGoal(k.toInt)), num.toInt)
     case rndPattern(avg, num) => new ForestAdapter(new SizedTreeGenerator(maxRepetitions, random, shortestTreeGenerator, avg.toInt, heuristicImpl), num.toInt)
     case kPathPattern(k) => new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new KPathCoverageGoal(k.toInt))
     case kPathDepthPattern(k, d) => new GoalBasedTreeGenerator(new BestEffortMaxDepthGenerator(maxRepetitions, random, regexGenerator, d.toInt, heuristicImpl), random)(grammar, new KPathCoverageGoal(k.toInt))
-    case recurrentKPathPattern(k, n) => new ForestSizeLimiter(new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new RecurrentKPathCoverageGoal(k.toInt)), n.toInt)
+    case recurrentKPathPattern(k, n) => new ForestSizeLimiter(new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new RecurrentKPathCoverageGoal(k.toInt, n.toInt)), n.toInt)
     case recurrentTimedKPathPattern(k, minutes) => new ForestTimeLimiter(new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new RecurrentKPathCoverageGoal(k.toInt)), minutes.toInt)
+    case incrementingKPathPattern(k, minutes) => new ForestTimeLimiter(new GoalBasedTreeGenerator(shortestTreeGenerator, random)(grammar, new IncrementingKPathCoverageGoal(k.toInt)), minutes.toInt)
     case probPattern(d, n) => new ForestAdapter(new NaiveProbabilisticTreeGenerator(maxRepetitions, regexGenerator, d.toInt, random, shortestTreeGenerator), n.toInt)
     case limitedProbPattern(d, c, n) => new ForestAdapter(new NaiveProbabilisticTreeGenerator(maxRepetitions, regexGenerator, d.toInt, random, shortestTreeGenerator, c.toInt), n.toInt)
     case _ => throw new IllegalArgumentException(s"Unknown mode '$mode'")
+  }
+}
+
+trait GrammarTransformationModule { self: Command =>
+  /* Normal form patterns */
+  private val backusNaurFormalizerPattern = """backus-naur-formalizer"""
+  private val extendedChomskyFormalizerPattern = """extended-chomsky-normal-formalizer"""
+  private val chomskyFormalizerPattern = """chomsky-normal-formalizer"""
+  private val extendedGreibachFormalizerPattern = """extended-greibach-normal-formalizer"""
+  private val greibachFormalizerPattern = """greibach-normal-formalizer"""
+  /* Normal form substep patterns */
+  private val nonsolitaryTerminalExtractionPattern = """nonsolitary-terminal-extraction"""
+  private val nonbinaryRuleReductionPattern = """nonbinary-rule-reduction"""
+  private val deletionRuleEliminationPattern = """deletion-rule-elimination"""
+  private val unitRuleEliminationPattern = """unit-rule-elimination"""
+  private val leftRecursionLinearizationPattern = """left-recursion-linearization"""
+  /* Grammar adaptation framework patterns */
+  private val alternationExtractionPattern = """internal-alternation-extraction"""
+  private val concatenationExtractionPattern = """internal-concatenation-extraction"""
+  private val ruleInliningPattern = """(\d+)-level-rule-inlining""".r
+  private val nonrecursiveRuleInliningPattern = """(\d+)-level-nonrecursive-rule-inlining""".r
+  private val quantificationEliminationPattern = """quantification-elimination"""
+  private val quantificationExpansionPattern = """(\d+)-fold-quantification-expansion""".r
+  /* Utility transformation patterns */
+  private val identityPattern = """identity"""
+  private val duplicateAlternativeEliminationPattern = """duplicate-alternative-elimination"""
+  /* Command line documentation for the various transformers */
+  protected var mode: String = opt[String](default = "mode-not-provided", description =
+    """The Grammar Transformation mode. Possible values are:
+      | -- Normal Forms --
+      | backus-naur-formalizer                 (Puts the grammar into Backus-Naur form)
+      | extended-chomsky-normal-formalizer     (Requires BNF: Puts the grammar into extended Chomsky normal form)
+      | chomsky-normal-formalizer              (Requires BNF: Puts the grammar into Chomsky normal form)
+      | extended-greibach-normal-formalizer    (Requires ECNF: Puts the grammar into extended Greibach normal form)
+      | greibach-normal-formalizer             (Requires CNF: Puts the grammar into Greibach normal form)
+      | -- Normal Form Substeps --
+      | nonsolitary-terminal-extraction        (Requires BNF: Extract all non-solitary terminals into their own rules)
+      | nonbinary-rule-reduction               (Requires BNF: Splits concatenations with more than two elements into a rule cascade)
+      | deletion-rule-elimination              (Requires BNF: Eliminates deletion rules in non-start productions)
+      | unit-rule-elimination                  (Requires BNF: Eliminates unit rules in non-start productions)
+      | left-recursion-linearization           (Requires ECNF: Linearizes referencing order of leftmost references.)
+      | -- Grammar Adaptation Framework --
+      | internal-alternation-extraction        (Extracts all internal alternations into top level)
+      | internal-concatenation-extraction      (Extracts all internal concatenation into top level)
+      | <k>-level-rule-inlining                (Inlines rules into their reference sites, up to k times in the recursive case)
+      | <k>-level-nonrecursive-rule-inlining   (Inlines rules into only their acyclic reference sites, up to k times in the recursive case)
+      | <k>-fold-quantification-expansion      (Partially folds at most k alternatives of each quantification into a top-level iterative rule)
+      | quantification-elimination             (Folds each quantification into a top-level right-recursive rule)
+      | -- Utility Transformations --
+      | identity                               (Returns the input grammar)
+      | duplicate-alternative-elimination      (Prunes duplicate alternatives)""".stripMargin)
+  /* Keep in mind that the random seed from the RandomnessModule can be passed to constructors of random transformations here*/
+  lazy val grammarTransformer: GrammarTransformer = mode match {
+    /* Normal forms */
+    case `backusNaurFormalizerPattern` => BackusNaurFormalizer
+    case `extendedChomskyFormalizerPattern` => ExtendedChomskyFormalizer
+    case `chomskyFormalizerPattern` => ChomskyFormalizer
+    case `extendedGreibachFormalizerPattern` => ExtendedGreibachFormalizer
+    case `greibachFormalizerPattern` => GreibachFormalizer
+    /* Normal form substeps */
+    case `nonsolitaryTerminalExtractionPattern` => NonsolitaryTerminalExtraction
+    case `nonbinaryRuleReductionPattern` => NonbinaryRuleReduction
+    case `deletionRuleEliminationPattern` => DeletionRuleElimination
+    case `unitRuleEliminationPattern` => UnitRuleElimination
+    case `leftRecursionLinearizationPattern` => LeftRecursionLinearization
+    /* Grammar adaptation framework */
+    case `alternationExtractionPattern` => AlternationExtraction
+    case `concatenationExtractionPattern` => ConcatenationExtraction
+    case ruleInliningPattern(inlineLevels) => new RuleInlining(inlineLevels.toInt)
+    case nonrecursiveRuleInliningPattern(inlineLevels) => new NonrecursiveRuleInlining(inlineLevels.toInt)
+    case `quantificationEliminationPattern` => QuantificationElimination
+    case quantificationExpansionPattern(repetitionLimit) => new QuantificationExpansion(repetitionLimit.toInt)
+    /* Utility transformations */
+    case `identityPattern` => IdentityTransformer
+    case `duplicateAlternativeEliminationPattern` => DuplicateAlternativeElimination
+    case _ => throw new IllegalArgumentException(s"Unknown mode '$mode'")
+  }
+}
+
+trait GrammarOutputModule { self: Command =>
+  var outputGrammarFile: File = arg[File](description = "Path to the output grammar file.")
+  var storingStrategy: String = opt[String](default = "print", description = "How to persist the grammar. Valid options are 'print' and 'marshal'.")
+  lazy val grammarStorer: StoringStrategy = storingStrategy match {
+    case "print" => PrintGrammar
+    case "marshal" => MarshalGrammar
+    case _ => throw new IllegalArgumentException(s"Unknown storing strategy $storingStrategy")
   }
 }
 

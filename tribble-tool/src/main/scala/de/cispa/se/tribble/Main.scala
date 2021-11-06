@@ -22,6 +22,7 @@ object Main {
       .withCommands(
         new GenerateTask,
         new GenerateForestationTask,
+        new GrammarTransformationTask,
         new InlineGrammarTask,
         new ExtractAlternationsTask,
         new CacheGrammarTask,

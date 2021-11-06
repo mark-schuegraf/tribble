@@ -128,7 +128,6 @@ object ShortestDerivationComputation extends AssemblyPhase {
     rule.shortestDerivation
   }
 
-
   private def updateShortestDerivation(prod: Production)(implicit resolved: mutable.Map[NonTerminal, Int], grammar: GrammarRepr): Unit = {
     val (nonterm, rule) = prod
     val min = rule.toStream.minBy(resolve).shortestDerivation
@@ -144,6 +143,21 @@ object ShortestDerivationComputation extends AssemblyPhase {
       c += 1
     } while (grammar.rules.values.flatMap(_.toStream).exists(_.shortestDerivation == Int.MaxValue))
     logger.info(s"Computed shortest derivations in $c iterations.")
+    grammar
+  }
+}
+
+/** Useful if [[ShortestDerivationComputation]] needs to be rerun after structural changes have been made to the grammar. */
+object ShortestDerivationReset extends AssemblyPhase {
+  private val logger = getLogger
+
+  override def process(grammar: GrammarRepr): GrammarRepr = {
+    val resetShortestDerivationIfNonterminal: DerivationRule => Unit = {
+      case _: TerminalRule =>
+      case rule: DerivationRule => rule.shortestDerivation = Int.MaxValue
+    }
+    grammar.rules.values.flatMap(_.toStream).view.force.foreach(resetShortestDerivationIfNonterminal)
+    logger.info(s"Reset shortest derivations.")
     grammar
   }
 }

@@ -1,4 +1,5 @@
-package de.cispa.se.tribble.input
+package de.cispa.se.tribble
+package input
 
 import java.nio.file.{Files, Paths}
 

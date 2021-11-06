@@ -1,0 +1,9 @@
+image: openjdk:15-alpine
+
+build:
+  stage: build
+  script: ./gradlew clean assemble
+
+test:
+  stage: test
+  script: ./gradlew check

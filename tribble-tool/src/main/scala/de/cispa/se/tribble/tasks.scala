@@ -1,13 +1,14 @@
 package de.cispa.se.tribble
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-
 import de.cispa.se.tribble.Internal._
-import de.cispa.se.tribble.input.{AlternationExtraction, ObjectStreamGrammarCache, RuleInlining}
+import de.cispa.se.tribble.input.{GrammarStatistics, ObjectStreamGrammarCache}
 import de.cispa.se.tribble.output.GrammarPrettyPrinter
+import de.cispa.se.tribble.transformation.grammar_adaptation.{AlternationExtraction, RuleInlining}
 import org.backuity.clist.{Command, opt}
 import org.log4s.getLogger
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 
 trait Task {
   def execute(): Unit
@@ -33,22 +34,35 @@ final class GenerateTask extends Command("generate", "Generate sample inputs")
   }
 }
 
+final class GrammarTransformationTask extends Command("transform-grammar", "Output transformed input grammar")
+  with Task with GrammarTransformationModule with GrammarOutputModule with GrammarModule with CacheModule {
+  private val logger = getLogger
+
+  override def execute(): Unit = {
+    logger.info("Transforming grammar")
+    logger.trace(s"Input grammar: $grammar")
+
+    val transformed: GrammarRepr = grammarTransformer.transformGrammar(grammar)
+    grammarStorer.store(outputGrammarFile, transformed)
+  }
+}
+
 final class InlineGrammarTask extends Command("inline", "Output grammar with inlined productions")
   with Task with CacheModule with OutputModule with GrammarModule {
   var inlineLevels: Int = opt[Int](description = "How many times to perform inlining. Default 1", default = 1)
 
   override def execute(): Unit = {
-    val inlined = new RuleInlining(inlineLevels).process(grammar)
+    val inlined = new RuleInlining(inlineLevels).transformGrammar(grammar)
     val serialized = new GrammarPrettyPrinter(inlined).prettyPrint()
     Files.write(Files.createFile(outputDir.resolve(grammarFile.getName)), serialized.getBytes(StandardCharsets.UTF_8))
   }
 }
 
-final class ExtractAlternationsTask extends Command("extract-alternations", "Output grammar with all alternations extracted to top level")
+final class ExtractAlternationsTask extends Command("extract-alternatives", "Output grammar with all alternatives extracted to top level")
   with Task with CacheModule with OutputModule with GrammarModule {
 
   override def execute(): Unit = {
-    val extracted = AlternationExtraction.process(grammar)
+    val extracted = AlternationExtraction.transformGrammar(grammar)
     val serialized = new GrammarPrettyPrinter(extracted).prettyPrint()
     Files.write(Files.createFile(outputDir.resolve(grammarFile.getName)), serialized.getBytes(StandardCharsets.UTF_8))
   }
