@@ -2,10 +2,10 @@ package de.cispa.se.tribble
 package generation
 
 import org.jgrapht.Graph
-import org.jgrapht.alg.shortestpath.{CHManyToManyShortestPaths, EppsteinShortestPathIterator}
+import org.jgrapht.alg.shortestpath.{DefaultManyToManyShortestPaths, EppsteinShortestPathIterator}
 import org.jgrapht.graph.DefaultEdge
 import org.jgrapht.graph.builder.{GraphBuilder, GraphTypeBuilder}
-import org.jgrapht.util.{ConcurrencyUtil, SupplierUtil}
+import org.jgrapht.util.SupplierUtil
 
 import java.util.{Collections, Map => JMap, Set => JSet}
 import scala.collection.JavaConverters._
@@ -28,10 +28,8 @@ sealed class Reachability(grammar: GrammarRepr) {
   // gather interesting rules that are not guaranteed to be reachable from the root
   private val preliminaryTargets = grammarGraph.vertexSet().asScala.filter(isInteresting).toSet
   private val paths = {
-    val executor = ConcurrencyUtil.createThreadPoolExecutor(Runtime.getRuntime.availableProcessors())
-    val calc = new CHManyToManyShortestPaths(grammarGraph, executor)
+    val calc = new DefaultManyToManyShortestPaths(grammarGraph)
     val paths = calc.getManyToManyPaths(grammarGraph.vertexSet(), preliminaryTargets.asJava)
-    executor.shutdown()
     paths
   }
 
